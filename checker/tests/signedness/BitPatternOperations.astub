@@ -1,0 +1,23 @@
+package java.lang;
+
+class Double {
+    @org.checkerframework.checker.signedness.qual.BitPattern
+    public static native long doubleToLongBits(double value);
+
+    @org.checkerframework.checker.signedness.qual.BitPattern
+    public static native long doubleToRawLongBits(double value);
+
+    public static native double longBitsToDouble(
+            @org.checkerframework.checker.signedness.qual.BitPattern long bits);
+}
+
+class Float {
+    @org.checkerframework.checker.signedness.qual.BitPattern
+    public static native int floatToIntBits(float value);
+
+    @org.checkerframework.checker.signedness.qual.BitPattern
+    public static native int floatToRawIntBits(float value);
+
+    public static native float intBitsToFloat(
+            @org.checkerframework.checker.signedness.qual.BitPattern int bits);
+}

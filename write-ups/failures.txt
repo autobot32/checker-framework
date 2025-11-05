@@ -1,0 +1,7 @@
+FAILURES
+
+1. Took me a really long time to navigate and understand how the build file works, 
+and the LLM was not very helpful in helping me understand.
+2. Testsuite failed on the first attempt, however it only took a 2nd attempt to get it right.
+3. Felt like most of the time spent was navigating around dependencies and trying to find a way to just run my test suite,
+without building the entire project.

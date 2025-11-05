@@ -1,0 +1,9 @@
+SUCCESSES
+
+1. Gave the LLM the issue, and it navigated through the entire repository to pinpoint a plan and where we can start very fast.
+2. I was able to get more context regarding the issue itself, and how we can fix it. The LLM did a great job breaking it down 
+for me.
+3. After lots of chats, I was able to run a command that voided some other dependencies, allowing me to run and execute the test suite.
+4. The LLM, without instruction, figured out to enable the test suite that was currently disabled, saving me time.
+5. While it did take a significant amount of time, I was able to successfully resolve the issue to the best of my knowledge
+and pass the required test cases.

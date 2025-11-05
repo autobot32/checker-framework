@@ -24,6 +24,9 @@ sourcesJar {
   duplicatesStrategy = DuplicatesStrategy.EXCLUDE
 }
 
+tasks.named("jar") {
+  duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+}
 
 configurations {
   implementation.extendsFrom(stubifierImplementation)

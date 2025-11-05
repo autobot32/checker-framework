@@ -6,9 +6,11 @@ import com.sun.source.tree.ExpressionTree;
 import com.sun.source.tree.MethodInvocationTree;
 import com.sun.source.tree.MethodTree;
 import com.sun.source.tree.Tree;
+import com.sun.source.tree.UnaryTree;
 import javax.lang.model.element.ExecutableElement;
 import org.checkerframework.checker.interning.InterningVisitor;
 import org.checkerframework.checker.interning.qual.EqualsMethod;
+import org.checkerframework.checker.signedness.qual.BitPattern;
 import org.checkerframework.checker.signedness.qual.PolySigned;
 import org.checkerframework.checker.signedness.qual.Signed;
 import org.checkerframework.checker.signedness.qual.Unsigned;
@@ -54,6 +56,16 @@ public class SignednessVisitor extends BaseTypeVisitor<SignednessAnnotatedTypeFa
   }
 
   /**
+   * Returns true if an annotated type is annotated as {@link BitPattern}.
+   *
+   * @param type the annotated type to be checked
+   * @return true if the annotated type is annotated as {@link BitPattern}
+   */
+  private boolean hasBitPatternAnnotation(AnnotatedTypeMirror type) {
+    return type.hasPrimaryAnnotation(BitPattern.class);
+  }
+
+  /**
    * Enforces the following rules on binary operations involving Unsigned and Signed types:
    *
    * <ul>
@@ -78,15 +90,25 @@ public class SignednessVisitor extends BaseTypeVisitor<SignednessAnnotatedTypeFa
     AnnotatedTypeMirror rightOpType = argTypes.second;
 
     Tree.Kind kind = tree.getKind();
+    boolean leftBitPattern = hasBitPatternAnnotation(leftOpType);
+    boolean rightBitPattern = hasBitPatternAnnotation(rightOpType);
+    boolean hasBitPattern = leftBitPattern || rightBitPattern;
+    boolean shouldCheckMixed = true;
 
     switch (kind) {
       case DIVIDE:
       case REMAINDER:
+        if (hasBitPattern) {
+          checker.reportError(tree, "operation.bitpattern", kind, leftOpType, rightOpType);
+          shouldCheckMixed = false;
+          break;
+        }
         if (hasUnsignedAnnotation(leftOpType)) {
           checker.reportError(leftOp, "operation.unsignedlhs", kind, leftOpType, rightOpType);
         } else if (hasUnsignedAnnotation(rightOpType)) {
           checker.reportError(rightOp, "operation.unsignedrhs", kind, leftOpType, rightOpType);
         }
+        shouldCheckMixed = false;
         break;
 
       case RIGHT_SHIFT:
@@ -95,6 +117,7 @@ public class SignednessVisitor extends BaseTypeVisitor<SignednessAnnotatedTypeFa
             && !SignednessShifts.isCastedShiftEitherSignedness(tree, getCurrentPath())) {
           checker.reportError(leftOp, "shift.signed", kind, leftOpType, rightOpType);
         }
+        shouldCheckMixed = false;
         break;
 
       case UNSIGNED_RIGHT_SHIFT:
@@ -103,9 +126,19 @@ public class SignednessVisitor extends BaseTypeVisitor<SignednessAnnotatedTypeFa
             && !SignednessShifts.isCastedShiftEitherSignedness(tree, getCurrentPath())) {
           checker.reportError(leftOp, "shift.unsigned", kind, leftOpType, rightOpType);
         }
+        shouldCheckMixed = false;
         break;
 
       case LEFT_SHIFT:
+        shouldCheckMixed = false;
+        break;
+
+      case MULTIPLY:
+      case MINUS:
+        if (hasBitPattern) {
+          checker.reportError(tree, "operation.bitpattern", kind, leftOpType, rightOpType);
+          shouldCheckMixed = false;
+        }
         break;
 
       case GREATER_THAN:
@@ -117,11 +150,13 @@ public class SignednessVisitor extends BaseTypeVisitor<SignednessAnnotatedTypeFa
         } else if (hasUnsignedAnnotation(rightOpType)) {
           checker.reportError(rightOp, "comparison.unsignedrhs", leftOpType, rightOpType);
         }
+        shouldCheckMixed = false;
         break;
 
       case EQUAL_TO:
       case NOT_EQUAL_TO:
         if (!atypeFactory.maybeIntegral(leftOpType) || !atypeFactory.maybeIntegral(rightOpType)) {
+          shouldCheckMixed = false;
           break;
         }
         if (leftOpType.hasPrimaryAnnotation(Unsigned.class)
@@ -131,28 +166,39 @@ public class SignednessVisitor extends BaseTypeVisitor<SignednessAnnotatedTypeFa
             && rightOpType.hasPrimaryAnnotation(Unsigned.class)) {
           checker.reportError(tree, "comparison.mixed.unsignedrhs", leftOpType, rightOpType);
         }
+        shouldCheckMixed = false;
         break;
 
       case PLUS:
         if (TreeUtils.isStringConcatenation(tree)) {
-          if (!typeHierarchy.isSubtypeShallowEffective(leftOpType, atypeFactory.SIGNED)) {
+          if (hasBitPattern) {
+            checker.reportError(tree, "bitpattern.concat");
+          } else if (!typeHierarchy.isSubtypeShallowEffective(leftOpType, atypeFactory.SIGNED)) {
             checker.reportError(leftOp, "unsigned.concat");
           } else if (!typeHierarchy.isSubtypeShallowEffective(rightOpType, atypeFactory.SIGNED)) {
             checker.reportError(rightOp, "unsigned.concat");
           }
+          shouldCheckMixed = false;
+          break;
+        } else if (hasBitPattern) {
+          checker.reportError(tree, "operation.bitpattern", kind, leftOpType, rightOpType);
+          shouldCheckMixed = false;
           break;
         }
-      // Other plus binary trees should be handled in the default case.
-      // fall through
-      default:
-        if (leftOpType.hasPrimaryAnnotation(Unsigned.class)
-            && rightOpType.hasPrimaryAnnotation(Signed.class)) {
-          checker.reportError(tree, "operation.mixed.unsignedlhs", kind, leftOpType, rightOpType);
-        } else if (leftOpType.hasPrimaryAnnotation(Signed.class)
-            && rightOpType.hasPrimaryAnnotation(Unsigned.class)) {
-          checker.reportError(tree, "operation.mixed.unsignedrhs", kind, leftOpType, rightOpType);
-        }
         break;
+
+      default:
+        // Nothing
+    }
+
+    if (shouldCheckMixed) {
+      if (leftOpType.hasPrimaryAnnotation(Unsigned.class)
+          && rightOpType.hasPrimaryAnnotation(Signed.class)) {
+        checker.reportError(tree, "operation.mixed.unsignedlhs", kind, leftOpType, rightOpType);
+      } else if (leftOpType.hasPrimaryAnnotation(Signed.class)
+          && rightOpType.hasPrimaryAnnotation(Unsigned.class)) {
+        checker.reportError(tree, "operation.mixed.unsignedrhs", kind, leftOpType, rightOpType);
+      }
     }
     return super.visitBinary(tree, p);
   }
@@ -252,10 +298,26 @@ public class SignednessVisitor extends BaseTypeVisitor<SignednessAnnotatedTypeFa
     AnnotatedTypeMirror exprType = argTypes.second;
 
     Tree.Kind kind = tree.getKind();
+    boolean varBitPattern = hasBitPatternAnnotation(varType);
+    boolean exprBitPattern = hasBitPatternAnnotation(exprType);
+    boolean hasBitPattern = varBitPattern || exprBitPattern;
+    boolean shouldCheckMixed = true;
+    boolean reportedBitPatternError = false;
 
     switch (kind) {
       case DIVIDE_ASSIGNMENT:
       case REMAINDER_ASSIGNMENT:
+        if (hasBitPattern) {
+          checker.reportError(
+              tree,
+              "compound.assignment.bitpattern",
+              kindWithoutAssignment(kind),
+              varType,
+              exprType);
+          shouldCheckMixed = false;
+          reportedBitPatternError = true;
+          break;
+        }
         if (hasUnsignedAnnotation(varType)) {
           checker.reportError(
               var,
@@ -271,6 +333,7 @@ public class SignednessVisitor extends BaseTypeVisitor<SignednessAnnotatedTypeFa
               varType,
               exprType);
         }
+        shouldCheckMixed = false;
         break;
 
       case RIGHT_SHIFT_ASSIGNMENT:
@@ -282,6 +345,7 @@ public class SignednessVisitor extends BaseTypeVisitor<SignednessAnnotatedTypeFa
               varType,
               exprType);
         }
+        shouldCheckMixed = false;
         break;
 
       case UNSIGNED_RIGHT_SHIFT_ASSIGNMENT:
@@ -293,41 +357,93 @@ public class SignednessVisitor extends BaseTypeVisitor<SignednessAnnotatedTypeFa
               varType,
               exprType);
         }
+        shouldCheckMixed = false;
         break;
 
       case LEFT_SHIFT_ASSIGNMENT:
+        shouldCheckMixed = false;
+        break;
+
+      case MULTIPLY_ASSIGNMENT:
+      case MINUS_ASSIGNMENT:
+        if (hasBitPattern) {
+          checker.reportError(
+              tree,
+              "compound.assignment.bitpattern",
+              kindWithoutAssignment(kind),
+              varType,
+              exprType);
+          shouldCheckMixed = false;
+          reportedBitPatternError = true;
+        }
         break;
 
       case PLUS_ASSIGNMENT:
         if (TreeUtils.isStringCompoundConcatenation(tree)) {
-          if (!typeHierarchy.isSubtypeShallowEffective(exprType, atypeFactory.SIGNED)) {
+          if (hasBitPattern) {
+            checker.reportError(tree, "bitpattern.concat");
+            reportedBitPatternError = true;
+          } else if (!typeHierarchy.isSubtypeShallowEffective(exprType, atypeFactory.SIGNED)) {
             checker.reportError(tree.getExpression(), "unsigned.concat");
           }
+          shouldCheckMixed = false;
+          break;
+        } else if (hasBitPattern) {
+          checker.reportError(
+              tree,
+              "compound.assignment.bitpattern",
+              kindWithoutAssignment(kind),
+              varType,
+              exprType);
+          shouldCheckMixed = false;
+          reportedBitPatternError = true;
           break;
         }
-      // Other plus binary trees should be handled in the default case.
-      // fall through
-      default:
-        if (varType.hasPrimaryAnnotation(Unsigned.class)
-            && exprType.hasPrimaryAnnotation(Signed.class)) {
-          checker.reportError(
-              expr,
-              "compound.assignment.mixed.unsigned.variable",
-              kindWithoutAssignment(kind),
-              varType,
-              exprType);
-        } else if (varType.hasPrimaryAnnotation(Signed.class)
-            && exprType.hasPrimaryAnnotation(Unsigned.class)) {
-          checker.reportError(
-              expr,
-              "compound.assignment.mixed.unsigned.expression",
-              kindWithoutAssignment(kind),
-              varType,
-              exprType);
-        }
         break;
+
+      default:
+        // Nothing
+    }
+
+    if (shouldCheckMixed) {
+      if (varType.hasPrimaryAnnotation(Unsigned.class)
+          && exprType.hasPrimaryAnnotation(Signed.class)) {
+        checker.reportError(
+            expr,
+            "compound.assignment.mixed.unsigned.variable",
+            kindWithoutAssignment(kind),
+            varType,
+            exprType);
+      } else if (varType.hasPrimaryAnnotation(Signed.class)
+          && exprType.hasPrimaryAnnotation(Unsigned.class)) {
+        checker.reportError(
+            expr,
+            "compound.assignment.mixed.unsigned.expression",
+            kindWithoutAssignment(kind),
+            varType,
+            exprType);
+      }
+    }
+    if (reportedBitPatternError) {
+      return null;
     }
     return super.visitCompoundAssignment(tree, p);
+  }
+
+  @Override
+  public Void visitUnary(UnaryTree tree, Void p) {
+    Tree.Kind kind = tree.getKind();
+    if (kind == Tree.Kind.PREFIX_DECREMENT
+        || kind == Tree.Kind.PREFIX_INCREMENT
+        || kind == Tree.Kind.POSTFIX_DECREMENT
+        || kind == Tree.Kind.POSTFIX_INCREMENT) {
+      AnnotatedTypeMirror varType = atypeFactory.getAnnotatedTypeLhs(tree.getExpression());
+      if (hasBitPatternAnnotation(varType)) {
+        checker.reportError(tree, "unary.bitpattern", kind);
+        return null;
+      }
+    }
+    return super.visitUnary(tree, p);
   }
 
   @Override
